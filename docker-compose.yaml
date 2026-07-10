@@ -65,6 +65,8 @@ services:
     build: ./edcb
     image: tv-edcb
     container_name: edcb_chscan
+    # 録画ファイル・生成物をホストユーザー (uid 1000) 所有で書き出すため非 root で実行する。
+    user: "1000:1000"
     profiles: ["scan"]
     depends_on:
       mirakc:
@@ -83,6 +85,8 @@ services:
     build: ./edcb
     image: tv-edcb
     container_name: edcb
+    # 録画ファイルをホストユーザー (uid 1000) 所有で書き出すため非 root で実行する。
+    user: "1000:1000"
     depends_on:
       mirakc:
         condition: service_healthy
