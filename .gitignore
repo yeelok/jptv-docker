@@ -7,5 +7,12 @@
 /capture/
 *.ts
 
+# EDCB Setting/: track only the ChSet channel definitions (config);
+# ignore runtime data (gathered EPG, reservations, logs) that churns constantly.
+/edcb/conf/Setting/*
+!/edcb/conf/Setting/.gitkeep
+!/edcb/conf/Setting/*ChSet4.txt
+!/edcb/conf/Setting/ChSet5.txt
+
 # OS / editor cruft
 .DS_Store
