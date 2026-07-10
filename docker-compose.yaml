@@ -1,0 +1,59 @@
+services:
+  mirakc:
+    image: mirakc/mirakc:alpine
+    container_name: mirakc
+    init: true
+    restart: unless-stopped
+    devices:
+      - /dev/pxmlt8video0
+      - /dev/pxmlt8video1
+      - /dev/pxmlt8video2
+      - /dev/pxmlt8video3
+      - /dev/pxmlt8video4
+      - /dev/pxmlt8video5
+      - /dev/pxmlt8video6
+      - /dev/pxmlt8video7
+    ports:
+      - 40772:40772
+    volumes:
+      - mirakc-epg:/var/lib/mirakc/epg
+      - ./mirakc/config.yml:/etc/mirakc/config.yml:ro
+    environment:
+      TZ: Asia/Tokyo
+      RUST_LOG: info
+
+  b25:
+    build: ./b25
+    container_name: b25
+    depends_on:
+      - bcas
+    init: true
+    restart: unless-stopped
+    ports:
+      - 40773:40773
+    environment:
+      BCAS_SERVER: bcas:40774
+      TZ: Asia/Tokyo
+
+  bcas:
+    build: ./bcas
+    container_name: bcas
+    init: true
+    restart: unless-stopped
+    devices:
+      # ICカードリーダーを追加
+      - /dev/pxmlt8card0
+    ports:
+      - 40774:40774
+    environment:
+      TZ: Asia/Tokyo
+
+  konomitv:
+    extends:
+      file: ./KonomiTV/docker-compose.yaml
+      service: konomitv
+
+volumes:
+  mirakc-epg:
+    name: mirakc_epg
+    driver: local

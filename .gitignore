@@ -1,0 +1,11 @@
+# Nested projects manage their own git history
+/KonomiTV/
+/px4_drv/
+
+# Recorded / captured media (runtime output)
+/recordings/
+/capture/
+*.ts
+
+# OS / editor cruft
+.DS_Store
