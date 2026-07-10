@@ -21,6 +21,14 @@ services:
     environment:
       TZ: Asia/Tokyo
       RUST_LOG: info
+    # EDCB のチャンネルスキャン/EPG 取得は mirakc の API が応答可能になってから開始する必要があるため、
+    # ヘルスチェックを定義して edcb 系サービスの depends_on: service_healthy で待ち合わせる。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:40772/api/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
 
   b25:
     build: ./b25
@@ -48,10 +56,55 @@ services:
     environment:
       TZ: Asia/Tokyo
 
+  # EDCB のチャンネルスキャン (ChSet4/ChSet5 を生成する一回限りのサービス)。
+  # 生成物は bind マウントした ./edcb/conf/Setting に永続化されるため、通常の起動では実行不要。
+  # profiles により通常の `docker compose up` からは除外し、チャンネル構成を変えたときだけ
+  #   docker compose --profile scan run --rm edcb_chscan
+  # のように明示的に実行する (毎回の起動で数分のスキャンが走るのを避けるため)。
+  edcb_chscan:
+    build: ./edcb
+    image: tv-edcb
+    container_name: edcb_chscan
+    profiles: ["scan"]
+    depends_on:
+      mirakc:
+        condition: service_healthy
+    network_mode: host
+    command: ["/usr/local/bin/EpgDataCap_Bon", "-d", "BonDriver_LinuxMirakc.so", "-chscan"]
+    volumes:
+      - ./edcb/conf/Common.ini:/var/local/edcb/Common.ini
+      - ./edcb/conf/EpgDataCap_Bon.ini:/var/local/edcb/EpgDataCap_Bon.ini
+      - ./edcb/conf/EpgTimerSrv.ini:/var/local/edcb/EpgTimerSrv.ini
+      - ./edcb/conf/Setting:/var/local/edcb/Setting
+
+  # EDCB 本体 (EpgTimerSrv)。KonomiTV は EpgTimerNW (TCP 4510) 経由でこのサービスに接続する。
+  # BonDriver_LinuxMirakc 経由で mirakc から放送波を受信し、録画は /recordings に書き出す。
+  edcb:
+    build: ./edcb
+    image: tv-edcb
+    container_name: edcb
+    depends_on:
+      mirakc:
+        condition: service_healthy
+    restart: unless-stopped
+    network_mode: host
+    command: /usr/local/bin/EpgTimerSrv
+    volumes:
+      - ./edcb/conf/Common.ini:/var/local/edcb/Common.ini
+      - ./edcb/conf/EpgDataCap_Bon.ini:/var/local/edcb/EpgDataCap_Bon.ini
+      - ./edcb/conf/EpgTimerSrv.ini:/var/local/edcb/EpgTimerSrv.ini
+      - ./edcb/conf/Setting:/var/local/edcb/Setting
+      - /recordings:/recordings
+
   konomitv:
     extends:
       file: ./KonomiTV/docker-compose.yaml
       service: konomitv
+    depends_on:
+      mirakc:
+        condition: service_healthy
+      edcb:
+        condition: service_started
 
 volumes:
   mirakc-epg:
