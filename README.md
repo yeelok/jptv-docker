@@ -113,8 +113,9 @@ lsusb | grep 0511                          # tuner enumerated (VID 0x0511)
 KonomiTV's internal HTTP server binds to a fixed loopback address in source, with no config option.
 This stack changes it to `0.0.0.0` (one line in `server/KonomiTV.py`) so you can front KonomiTV with
 **your own reverse proxy** on port `7010`. That change lives in a **fork** of KonomiTV, pinned as the
-submodule. The fork carries a second small patch too — a `MetadataAnalyzer` fix so GPU-compressed HEVC
-recordings catalog correctly (see [Post-record compression](#post-record-compression-optional-nvidia-gpu)).
+submodule. The fork carries two more small patches for GPU-compressed HEVC recordings — a
+`MetadataAnalyzer` fix so they catalog correctly and a `TSKeyFrameSeeker` seek fallback so they play
+back correctly (see [Post-record compression](#post-record-compression-optional-nvidia-gpu)).
 
 > If you only use KonomiTV's built-in HTTPS (Akebi) on port `7000`, you don't need the change — point
 > the submodule at upstream `tsukumijima/KonomiTV` instead.
@@ -296,10 +297,17 @@ How it works:
   *finished* recording, whether it ended naturally **or was stopped/cancelled early**. (A watcher is used
   rather than EDCB's post-record bat because the bat only fires on natural completion.)
 - It uses **[tsreplace](https://github.com/rigaya/tsreplace)** (rigaya) to re-encode *only* the video PID
-  to HEVC via NVENC, copying audio / captions / SDT-EIT through unchanged, then replaces the raw `.ts`
-  in place. Already-HEVC files are skipped (idempotent).
-- The KonomiTV fork includes a small `MetadataAnalyzer` fix so re-encoded HEVC recordings catalog
-  (upstream's sample-probe otherwise misses the re-muxed audio).
+  to HEVC, copying audio / captions / SDT-EIT through unchanged, then replaces the raw `.ts` in place.
+  Already-HEVC files are skipped (idempotent).
+- tsreplace drives **[NVEncC](https://github.com/rigaya/NVEnc)** (rigaya, GPU) as its encoder — *not*
+  ffmpeg. NVEncC reads the ARIB TS natively and preserves its PTS/DTS, so tsreplace interleaves the
+  passthrough streams (audio / captions / PSI / PCR) evenly across the output. This is essential:
+  KonomiTV plays recordings by seeking to a mid-file keyframe and re-encoding forward, so an encoder
+  whose output made tsreplace cluster PSI/PCR (as an ffmpeg pipe does) would leave mid-file segments
+  with no PAT/PMT and no audio, and playback would fail.
+- The KonomiTV fork carries two small patches for these HEVC recordings: a `MetadataAnalyzer` fix so
+  they catalog (upstream's sample-probe otherwise misses the re-muxed audio), and a `TSKeyFrameSeeker`
+  fallback that seeks on video-PES DTS when PCR is sparse (belt-and-suspenders for oddly-muxed TS).
 
 Requires the GPU override (`postrec` gets GPU access via `docker-compose.nvidia.yaml`). The watcher is a
 **safe no-op** (recordings kept raw) on hosts without a GPU. To disable, just don't run the `postrec`

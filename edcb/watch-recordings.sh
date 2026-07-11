@@ -26,13 +26,16 @@ compress() {
 
     tmp="${src%.ts}.hevc.part.ts"
     log "compressing: $src"
-    # tsreplace drives ffmpeg (args after -e): decode video from the piped TS, deinterlace,
-    # GPU HEVC encode, emit video-only mpegts; tsreplace swaps it in and copies the rest.
+    # tsreplace drives NVEncC (args after -e): NVEncC reads the ARIB TS from stdin with the
+    # NVDEC hardware reader (--avhw), deinterlaces the 1080i field pairs, GPU HEVC-encodes at
+    # a constant-quality target, and emits an mpegts video elementary stream on stdout; tsreplace
+    # swaps that in for the original video PID and copies audio / captions / PSI / PCR unchanged.
+    # NVEncC (not ffmpeg) is used because it preserves the source PTS/DTS, which lets tsreplace
+    # interleave the passthrough streams evenly — required for KonomiTV's mid-file seek playback.
     tsreplace -i "$src" -o "$tmp" \
-        -e ffmpeg -hide_banner -nostats -loglevel error -i - -an -sn -dn \
-            -vf yadif=0:-1:1 \
-            -c:v hevc_nvenc -preset p5 -rc vbr -cq 26 -b:v 0 -g 90 \
-            -f mpegts - >>"$LOG" 2>&1
+        -e nvencc --avhw --input - --interlace tff --vpp-deinterlace normal \
+            --codec hevc --qvbr 26 --preset quality --gop-len 90 \
+            --output-format mpegts --output - >>"$LOG" 2>&1
     rc=$?
     if [ "$rc" -eq 0 ] && [ -f "$tmp" ]; then
         srcsz=$(stat -c %s "$src" 2>/dev/null || echo 0)

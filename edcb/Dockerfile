@@ -62,11 +62,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # tsreplace (rigaya): re-encodes only the video PID of a TS, copying audio / ARIB captions /
-# SDT/EIT unchanged. Used by the post-record compression hook (edcb/postrec.sh) so compressed
-# recordings keep their program metadata + captions and stay fully catalogued by KonomiTV.
+# SDT/EIT unchanged. Used by the post-record compression watcher (edcb/watch-recordings.sh) so
+# compressed recordings keep their program metadata + captions and stay fully catalogued by KonomiTV.
 # Prebuilt .deb depends only on libc6/libgcc-s1 (both present in bookworm).
 ADD https://github.com/rigaya/tsreplace/releases/download/0.19/tsreplace_0.19_amd64.deb /tmp/tsreplace.deb
 RUN dpkg -i /tmp/tsreplace.deb && rm -f /tmp/tsreplace.deb
+
+# NVEncC (rigaya): the encoder tsreplace drives for the actual HEVC re-encode. It reads the ARIB
+# MPEG-TS natively and preserves its PTS/DTS, so tsreplace can interleave the passthrough streams
+# (audio / captions / PSI / PCR) evenly across the output. This matters because KonomiTV plays
+# recordings by seeking to a mid-file keyframe and re-encoding forward — an encoder that clustered
+# PSI/PCR (as ffmpeg-piped output does) would leave mid-file segments with no PAT/PMT and no audio.
+# Prebuilt .deb depends only on libc6 (present in bookworm). Requires the NVIDIA runtime only at
+# run time (docker-compose.nvidia.yaml); the build itself needs no GPU.
+ADD https://github.com/rigaya/NVEnc/releases/download/9.24/nvencc_9.24_amd64.deb /tmp/nvencc.deb
+RUN dpkg -i /tmp/nvencc.deb && rm -f /tmp/nvencc.deb
 
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 COPY --from=builder /usr/local/lib/edcb/ /usr/local/lib/edcb/

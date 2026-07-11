@@ -131,6 +131,20 @@ def check_edcb():
     return result("EDCB", "tag", cur_tag, latest_tag, edits, "edcb/Dockerfile")
 
 
+def check_rigaya_deb(name, repo, deb_prefix):
+    # ADD https://github.com/rigaya/<repo>/releases/download/<ver>/<deb_prefix>_<ver>_amd64.deb
+    txt = read("edcb/Dockerfile")
+    cur = re.search(rf"rigaya/{repo}/releases/download/(\S+?)/{deb_prefix}_", txt).group(1)
+    latest = max((t for t in git_tags(f"https://github.com/rigaya/{repo}")
+                  if re.fullmatch(r"\d+\.\d+", t)), key=numkey)
+    # the version appears twice on the ADD line (path + filename); one replace covers both
+    edits = ([("edcb/Dockerfile",
+               f"download/{cur}/{deb_prefix}_{cur}_amd64.deb",
+               f"download/{latest}/{deb_prefix}_{latest}_amd64.deb")]
+             if cur != latest else [])
+    return result(name, "release", cur, latest, edits, "edcb/Dockerfile")
+
+
 def check_konomitv():
     cur = re.search(r"VERSION = '([^']+)'", read("KonomiTV/server/app/constants.py")).group(1)
     latest = max((t for t in git_tags("https://github.com/tsukumijima/KonomiTV")
@@ -149,6 +163,8 @@ CHECKS = [
     check_edcb,
     lambda: check_git("EDCB_Material_WebUI", "https://github.com/EMWUI/EDCB_Material_WebUI", "edcb/Dockerfile"),
     lambda: check_git("BonDriver_LinuxMirakc", "https://github.com/matching/BonDriver_LinuxMirakc", "edcb/Dockerfile"),
+    lambda: check_rigaya_deb("tsreplace", "tsreplace", "tsreplace"),
+    lambda: check_rigaya_deb("NVEncC", "NVEnc", "nvencc"),
     check_konomitv,
 ]
 
