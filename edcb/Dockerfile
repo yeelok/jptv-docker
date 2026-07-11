@@ -19,9 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # EDCB 本体のビルド
 WORKDIR /tmp
-RUN git clone --filter=blob:none -b work-plus-s-251101 \
+RUN git clone --filter=blob:none -b work-plus-s-260703 \
     https://github.com/xtne6f/EDCB.git && \
-    git -C EDCB checkout d21fa8a8
+    git -C EDCB checkout 9770536e9f04
 WORKDIR /tmp/EDCB/Document/Unix
 RUN make -j "$(nproc)" && \
     make install && \
