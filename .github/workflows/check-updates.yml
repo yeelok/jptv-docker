@@ -1,0 +1,43 @@
+name: check-updates
+
+# Weekly check for upstream updates to the pinned dependencies.
+# Runs the same scripts/check-updates.py used locally. Never fails the job for
+# "updates available" — instead it opens (or refreshes) a single tracking issue.
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'   # Mondays 00:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # KonomiTV version is read from the submodule
+
+      - name: Check for dependency updates
+        id: check
+        run: |
+          set +e
+          python3 scripts/check-updates.py | tee report.txt
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or refresh tracking issue
+        if: steps.check.outputs.code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="⬆ Dependency updates available"
+          body="$(printf '```\n%s\n```\n\nApply the auto-updatable pins with:\n```\npython3 scripts/check-updates.py --apply\n```\nthen rebuild the affected services.' "$(cat report.txt)")"
+          num=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            gh issue edit "$num" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

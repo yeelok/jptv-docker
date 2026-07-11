@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Check upstream updates for every pinned dependency in this stack.
+Check (and optionally apply) upstream updates for every pinned dependency.
 
 Reads the *current* pins straight from the source files (single source of truth)
 and compares them against upstream:
@@ -8,12 +8,14 @@ and compares them against upstream:
   - Docker images  -> Docker Hub tags API
   - git clones     -> `git ls-remote` (default-branch HEAD)          (no API rate limit)
   - EDCB           -> `git ls-remote --tags` (work-plus-s-YYMMDD)
-  - KonomiTV       -> upstream release tags (vX.Y.Z)
+  - KonomiTV       -> upstream release tags (vX.Y.Z)  [report only; needs a fork rebase]
 
-No external dependencies (stdlib + git). Exit code: 0 if everything is current,
-1 if any update is available (handy for cron / CI).
+No external dependencies (stdlib + git). Exit code (check mode): 0 if everything is
+current, 1 if any update is available (handy for cron / CI).
 
-Usage:  python3 scripts/check-updates.py
+Usage:
+  python3 scripts/check-updates.py            # report only
+  python3 scripts/check-updates.py --apply    # rewrite the pins in-place, then rebuild
 """
 from __future__ import annotations
 
@@ -31,26 +33,34 @@ def read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
-def sha_after(text: str, marker: str) -> str | None:
-    """The `git ... checkout <sha>` that follows the first occurrence of `marker`."""
+def sha_after(text: str, marker: str) -> str:
     m = re.search(re.escape(marker) + r".*?checkout ([0-9a-f]{7,40})", text, re.S)
-    return m.group(1) if m else None
+    return m.group(1) if m else ""
 
 
 def git_head(url: str) -> str:
-    """Full SHA of the remote's default branch (HEAD)."""
     out = subprocess.check_output(["git", "ls-remote", url, "HEAD"], text=True, timeout=40)
     return out.split()[0]
 
 
 def git_tags(url: str) -> list[str]:
     out = subprocess.check_output(["git", "ls-remote", "--tags", url], text=True, timeout=40)
-    tags = []
-    for line in out.splitlines():
-        ref = line.split("refs/tags/")[-1]
-        if ref and not ref.endswith("^{}"):
-            tags.append(ref)
-    return tags
+    return [ln.split("refs/tags/")[-1] for ln in out.splitlines()
+            if "refs/tags/" in ln and not ln.rstrip().endswith("^{}")]
+
+
+def tag_commit(url: str, tag: str) -> str:
+    """Peeled commit SHA of a tag (works for both lightweight and annotated tags)."""
+    out = subprocess.check_output(["git", "ls-remote", "--tags", url, tag, tag + "^{}"],
+                                  text=True, timeout=40)
+    plain = peeled = ""
+    for ln in out.splitlines():
+        sha, ref = ln.split("\t")
+        if ref.endswith("^{}"):
+            peeled = sha
+        else:
+            plain = sha
+    return peeled or plain
 
 
 def hub_tags(repo: str) -> list[str]:
@@ -69,93 +79,138 @@ def numkey(s: str) -> list[int]:
     return [int(x) for x in re.findall(r"\d+", s)]
 
 
-# --- checks: each returns (name, kind, current, latest, pinned_in) ---
+def result(name, kind, current, latest, edits, note, manual=False) -> dict:
+    return {"name": name, "kind": kind, "current": current, "latest": latest,
+            "edits": edits, "note": note, "manual": manual,
+            "outdated": current != latest}
+
+
+# --- one function per dependency; returns a result() ---
 
 def check_mirakc():
-    cur = re.search(r"mirakc/mirakc:(\S+)", read("docker-compose.yaml")).group(1)
-    cand = [t for t in hub_tags("mirakc/mirakc") if re.fullmatch(r"\d+\.\d+\.\d+-alpine", t)]
-    latest = max(cand, key=numkey)
-    return ("mirakc", "image", cur, latest, "docker-compose.yaml, mirakc/capture_test.sh")
+    token = re.search(r"(mirakc/mirakc:\S+)", read("docker-compose.yaml")).group(1)
+    cur = token.split(":", 1)[1]
+    latest = max((t for t in hub_tags("mirakc/mirakc")
+                  if re.fullmatch(r"\d+\.\d+\.\d+-alpine", t)), key=numkey)
+    edits = ([(f, f"mirakc/mirakc:{cur}", f"mirakc/mirakc:{latest}")
+              for f in ("docker-compose.yaml", "mirakc/capture_test.sh", "README.md")]
+             if cur != latest else [])
+    return result("mirakc", "image", cur, latest, edits, "docker-compose.yaml, capture_test.sh")
 
 
 def check_alpine():
     cur = re.search(r"FROM alpine:(\S+)", read("b25/Dockerfile")).group(1)
-    cand = [t for t in hub_tags("library/alpine") if re.fullmatch(r"\d+\.\d+", t)]
-    latest = max(cand, key=numkey)
-    return ("alpine", "image", cur, latest, "b25/Dockerfile, bcas/Dockerfile")
+    latest = max((t for t in hub_tags("library/alpine") if re.fullmatch(r"\d+\.\d+", t)), key=numkey)
+    edits = ([(f, f"alpine:{cur}", f"alpine:{latest}") for f in ("b25/Dockerfile", "bcas/Dockerfile")]
+             if cur != latest else [])
+    return result("alpine", "image", cur, latest, edits, "b25/Dockerfile, bcas/Dockerfile")
 
 
-def check_git(name, url, current, pinned_in):
-    latest = git_head(url)
-    ok = latest.startswith(current)
-    return (name, "git", current, latest[: len(current)] if ok else latest[:12], pinned_in)
+def check_git(name, url, dockerfile):
+    # anchor on the owner/repo path (unique to the clone line, unlike a bare repo
+    # name which can also appear in comments)
+    cur = sha_after(read(dockerfile), url.split("github.com/")[-1])
+    latest_full = git_head(url)
+    outdated = not latest_full.startswith(cur)
+    new = latest_full[:12]
+    edits = [(dockerfile, f"checkout {cur}", f"checkout {new}")] if outdated else []
+    return result(name, "git", cur, new if outdated else cur, edits, dockerfile)
 
 
 def check_edcb():
     txt = read("edcb/Dockerfile")
-    cur = re.search(r"-b (work-plus-s-\S+)", txt).group(1)
-    dated = [t for t in git_tags("https://github.com/xtne6f/EDCB")
-             if re.fullmatch(r"work-plus-s-\d+", t)]
-    latest = max(dated, key=numkey)
-    return ("EDCB", "tag", cur, latest, "edcb/Dockerfile")
+    cur_tag = re.search(r"-b (work-plus-s-\S+)", txt).group(1)
+    cur_sha = sha_after(txt, "xtne6f/EDCB.git")
+    latest_tag = max((t for t in git_tags("https://github.com/xtne6f/EDCB")
+                      if re.fullmatch(r"work-plus-s-\d+", t)), key=numkey)
+    edits = []
+    if cur_tag != latest_tag:
+        new_sha = tag_commit("https://github.com/xtne6f/EDCB", latest_tag)[:12]
+        edits = [("edcb/Dockerfile", f"-b {cur_tag}", f"-b {latest_tag}"),
+                 ("edcb/Dockerfile", f"checkout {cur_sha}", f"checkout {new_sha}")]
+    return result("EDCB", "tag", cur_tag, latest_tag, edits, "edcb/Dockerfile")
 
 
 def check_konomitv():
-    desc = subprocess.check_output(
-        ["git", "-C", str(ROOT / "KonomiTV"), "describe", "--tags", "--abbrev=0"],
-        text=True, timeout=20).strip()
-    vt = [t for t in git_tags("https://github.com/tsukumijima/KonomiTV")
-          if re.fullmatch(r"v\d+\.\d+\.\d+", t)]
-    latest = max(vt, key=numkey)
-    return ("KonomiTV", "release", desc, latest, "submodule (fork of tsukumijima/KonomiTV)")
+    cur = re.search(r"VERSION = '([^']+)'", read("KonomiTV/server/app/constants.py")).group(1)
+    latest = max((t for t in git_tags("https://github.com/tsukumijima/KonomiTV")
+                  if re.fullmatch(r"v\d+\.\d+\.\d+", t)), key=numkey).lstrip("v")
+    # KonomiTV carries a local patch (bind-0.0.0.0), so an update means rebasing the fork —
+    # not something --apply should do automatically.
+    return result("KonomiTV", "release", cur, latest, [],
+                  "manual: rebase fork onto new tag, then bump submodule", manual=True)
 
 
 CHECKS = [
     check_mirakc,
     check_alpine,
-    lambda: check_git("libaribb25", "https://github.com/tsukumijima/libaribb25",
-                      sha_after(read("b25/Dockerfile"), "libaribb25.git"), "b25/Dockerfile"),
-    lambda: check_git("px4_drv", "https://github.com/yyya-nico/px4_drv",
-                      sha_after(read("bcas/Dockerfile"), "yyya-nico/px4_drv"),
-                      "bcas/Dockerfile + px4_drv submodule"),
+    lambda: check_git("libaribb25", "https://github.com/tsukumijima/libaribb25", "b25/Dockerfile"),
+    lambda: check_git("px4_drv", "https://github.com/yyya-nico/px4_drv", "bcas/Dockerfile"),
     check_edcb,
-    lambda: check_git("EDCB_Material_WebUI", "https://github.com/EMWUI/EDCB_Material_WebUI",
-                      sha_after(read("edcb/Dockerfile"), "EDCB_Material_WebUI.git"), "edcb/Dockerfile"),
-    lambda: check_git("BonDriver_LinuxMirakc", "https://github.com/matching/BonDriver_LinuxMirakc",
-                      sha_after(read("edcb/Dockerfile"), "BonDriver_LinuxMirakc.git"), "edcb/Dockerfile"),
+    lambda: check_git("EDCB_Material_WebUI", "https://github.com/EMWUI/EDCB_Material_WebUI", "edcb/Dockerfile"),
+    lambda: check_git("BonDriver_LinuxMirakc", "https://github.com/matching/BonDriver_LinuxMirakc", "edcb/Dockerfile"),
     check_konomitv,
 ]
 
 
+def apply_edits(edits) -> list:
+    changed = []
+    for rel, old, new in edits:
+        p = ROOT / rel
+        txt = p.read_text(encoding="utf-8")
+        if old in txt and old != new:
+            p.write_text(txt.replace(old, new), encoding="utf-8")
+            changed.append((rel, old, new))
+    return changed
+
+
 def main() -> int:
-    rows, updates, errors = [], [], []
+    do_apply = "--apply" in sys.argv[1:]
+    results = []
     for fn in CHECKS:
         try:
-            name, kind, cur, latest, where = fn()
-        except Exception as exc:  # never let one dependency abort the whole run
-            rows.append(("(check failed)", "error", "-", str(exc)[:50], ""))
-            errors.append(True)
-            continue
-        outdated = (cur != latest)
-        rows.append((name, kind, cur, latest, where if outdated else ""))
-        if outdated:
-            updates.append((name, cur, latest, where))
+            results.append(fn())
+        except Exception as exc:
+            results.append(result("(check failed)", "error", "-", str(exc)[:50], [], "", manual=True))
 
-    w = [max(len(str(r[i])) for r in rows) for i in range(4)]
+    w = [max(len(str(r[k])) for r in results) for k in ("name", "kind", "current", "latest")]
     print(f"  {'DEPENDENCY':<{w[0]}}  {'KIND':<{w[1]}}  {'CURRENT':<{w[2]}}  {'LATEST':<{w[3]}}")
-    print("  " + "-" * (w[0] + w[1] + w[2] + w[3] + 10))
-    for name, kind, cur, latest, where in rows:
-        flag = "  ⬆ update" if (cur != latest and kind != "error") else ("  ✗" if kind == "error" else "")
-        print(f"  {name:<{w[0]}}  {kind:<{w[1]}}  {cur:<{w[2]}}  {latest:<{w[3]}}{flag}")
-
+    print("  " + "-" * (sum(w) + 10))
+    for r in results:
+        flag = ""
+        if r["kind"] == "error":
+            flag = "  ✗"
+        elif r["outdated"]:
+            flag = "  ⬆ update (manual)" if r["manual"] else "  ⬆ update"
+        print(f"  {r['name']:<{w[0]}}  {r['kind']:<{w[1]}}  {r['current']:<{w[2]}}  {r['latest']:<{w[3]}}{flag}")
     print()
-    if updates:
-        print(f"{len(updates)} update(s) available:")
-        for name, cur, latest, where in updates:
-            print(f"  • {name}: {cur} -> {latest}   (edit: {where})")
-    else:
+
+    auto = [r for r in results if r["outdated"] and r["edits"]]
+    manual = [r for r in results if r["outdated"] and r["manual"]]
+
+    if not auto and not manual:
         print("All dependencies are up to date. ✓")
-    return 1 if updates or errors else 0
+        return 0
+
+    if do_apply:
+        applied = []
+        for r in auto:
+            applied += apply_edits(r["edits"])
+        if applied:
+            print("Applied:")
+            for rel, old, new in applied:
+                print(f"  • {rel}: {old.split()[-1]} -> {new.split()[-1]}")
+            print("\nNow rebuild the affected services, e.g.:  docker compose up -d --build")
+        for r in manual:
+            print(f"  • {r['name']}: {r['current']} -> {r['latest']}  (skipped — {r['note']})")
+        return 0
+
+    print(f"{len(auto) + len(manual)} update(s) available:")
+    for r in auto + manual:
+        tail = "  [--apply]" if r["edits"] else f"  ({r['note']})"
+        print(f"  • {r['name']}: {r['current']} -> {r['latest']}{tail}")
+    print("\nRun with --apply to rewrite the auto-updatable pins.")
+    return 1
 
 
 if __name__ == "__main__":
