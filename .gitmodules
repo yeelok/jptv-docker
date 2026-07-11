@@ -1,0 +1,6 @@
+[submodule "KonomiTV"]
+	path = KonomiTV
+	url = https://github.com/yeelok/KonomiTV.git
+[submodule "px4_drv"]
+	path = px4_drv
+	url = https://github.com/yyya-nico/px4_drv
