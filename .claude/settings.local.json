@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(git -C KonomiTV log --oneline -5)",
-      "Bash(docker --version)",
-      "Bash(docker compose *)"
-    ]
-  }
-}

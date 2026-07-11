@@ -10,5 +10,8 @@
 !/edcb/conf/Setting/*ChSet4.txt
 !/edcb/conf/Setting/ChSet5.txt
 
+# Claude Code local settings
+/.claude/
+
 # OS / editor cruft
 .DS_Store
