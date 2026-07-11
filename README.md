@@ -46,7 +46,12 @@ PX-MLT–series tuner.
    │ :7000 HTTPS (Akebi)               │ :4510  :5510 │  recording + reservations + own EPG
    │ :7010 HTTP  (→ your proxy)        └──────┬───────┘
    └────┬─────┘                               ▼
-   browser (mpegts.js / HLS)          /recordings/*.ts
+   browser (mpegts.js / HLS)          /recordings/*.ts ◀──▶ ┌──────────────────┐
+        ▲   recorded playback                               │     postrec      │
+        └───────────────────────────────────────────────── │  NVEncC (GPU):   │
+                     (KonomiTV reads /recordings)           │  MPEG-2 → HEVC   │
+                                                            │  in place        │
+                                                            └──────────────────┘
 ```
 
 Two independent data paths:
@@ -68,6 +73,7 @@ Two independent data paths:
 | **bcas** | Card-reader server (`pcscd` + PX4 IFD handler) | `40774` | build `./bcas` | [yyya-nico/px4_drv](https://github.com/yyya-nico/px4_drv) (`userland/ifd-px4`) |
 | **edcb** | Recording backend (EpgTimerSrv) + Material WebUI | `4510`, `5510` | build `./edcb` | [xtne6f/EDCB](https://github.com/xtne6f/EDCB) · [matching/BonDriver_LinuxMirakc](https://github.com/matching/BonDriver_LinuxMirakc) · [EMWUI/EDCB_Material_WebUI](https://github.com/EMWUI/EDCB_Material_WebUI) |
 | **konomitv** | Web UI — live & recorded viewing | `7000` (HTTPS), `7010` (HTTP) | submodule (fork of) | [tsukumijima/KonomiTV](https://github.com/tsukumijima/KonomiTV) |
+| **postrec** | Post-record compressor — watches `/recordings`, re-encodes finished recordings MPEG-2 → HEVC in place (optional, NVIDIA GPU) | — | build `./edcb` (reuses `tv-edcb`) | [rigaya/tsreplace](https://github.com/rigaya/tsreplace) · [rigaya/NVEnc](https://github.com/rigaya/NVEnc) |
 
 ---
 
@@ -101,7 +107,7 @@ lsusb | grep 0511                          # tuner enumerated (VID 0x0511)
 ├── mirakc/                 # mirakc config (tuners, channel lineup, decode filter)
 ├── b25/                    # ARIB-B25 descrambler image
 ├── bcas/                   # card-reader (pcscd + ifd-px4) image
-├── edcb/                   # EDCB image (Dockerfile) + conf/ (INIs, ChSet)
+├── edcb/                   # EDCB image (Dockerfile) + conf/ (INIs, ChSet) + watch-recordings.sh (postrec)
 ├── KonomiTV/               # git submodule → your fork of KonomiTV
 └── px4_drv/                # git submodule → yyya-nico/px4_drv (reference / IFD handler source)
 ```
@@ -187,6 +193,11 @@ curl -s http://127.0.0.1:7010/api/recording/presets
 Open KonomiTV at **`https://<host-ip-with-dashes>.local.konomi.tv:7000/`** (Akebi), or via your own
 reverse proxy in front of `:7010`. EDCB's guide fills in after its first EPG gather (or trigger one from
 the Material WebUI at `http://<host>:5510/`).
+
+> **Create an account.** Live/recorded viewing works anonymously, but **admin-only actions —
+> deleting recordings, changing server settings — require being logged in as an admin**, otherwise
+> you'll see *"録画ファイルを削除するには管理者権限が必要です。"*. Register from the KonomiTV UI
+> (アカウント作成); the **first account created is automatically the admin**.
 
 ---
 
@@ -308,6 +319,12 @@ How it works:
 Requires the GPU override (`postrec` gets GPU access via `docker-compose.nvidia.yaml`). The watcher is a
 **safe no-op** (recordings kept raw) on hosts without a GPU. To disable, just don't run the `postrec`
 service. Captions are preserved (unlike a plain ffmpeg re-encode).
+
+Progress and results go to the container's stdout — follow them with:
+
+```bash
+docker logs -f postrec       # "compressing…", "done: N -> M bytes", or failures (with NVEncC output)
+```
 
 ## Adapting to your environment
 
