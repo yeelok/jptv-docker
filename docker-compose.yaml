@@ -99,9 +99,21 @@ services:
       - ./edcb/conf/EpgTimerSrv.ini:/var/local/edcb/EpgTimerSrv.ini
       - ./edcb/conf/Setting:/var/local/edcb/Setting
       - /recordings:/recordings
-      # 録画後実行スクリプト (EpgTimerSrv.ini の BatFilePath から呼ばれる)。
-      # GPU がある環境では録画完了後に HEVC へ圧縮し raw ts を置き換える (無ければ raw のまま)。
-      - ./edcb/postrec.sh:/var/local/edcb/postrec.sh:ro
+
+  # 録画ファイル圧縮ウォッチャー。/recordings を監視し、録画完了 (自然終了・途中停止どちらも) した
+  # ファイルを tsreplace + NVENC で HEVC 化する (音声・字幕・番組情報 SDT/EIT は保持)。
+  # EpgTimerSrv とは別プロセスにして録画に干渉しないようにする。tv-edcb イメージ再利用。
+  # GPU が無い環境では何もしない (raw のまま)。GPU アクセスは docker-compose.nvidia.yaml で付与。
+  postrec:
+    build: ./edcb
+    image: tv-edcb
+    container_name: postrec
+    user: "1000:1000"
+    restart: unless-stopped
+    command: ["/bin/sh", "/opt/watch-recordings.sh"]
+    volumes:
+      - ./edcb/watch-recordings.sh:/opt/watch-recordings.sh:ro
+      - /recordings:/recordings
 
   konomitv:
     extends:

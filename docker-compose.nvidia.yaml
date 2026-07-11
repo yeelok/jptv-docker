@@ -21,8 +21,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu, compute, utility, video]
-  # EDCB: GPU access for the post-record HEVC compression hook (edcb/postrec.sh).
-  edcb:
+  # postrec: GPU access for the recordings compressor (tsreplace + hevc_nvenc).
+  postrec:
     deploy:
       resources:
         reservations:

@@ -286,22 +286,24 @@ an `NVEncC.elf` process and non-zero encoder/decoder utilization.
 
 ## Post-record compression (optional, NVIDIA GPU)
 
-EDCB writes recordings as raw MPEG-2 TS (~6–8 GB/hour). With a GPU, each finished recording can be
-auto-compressed to **HEVC** — **keeping ARIB captions and program metadata (SDT/EIT)** so it stays
-fully catalogued in KonomiTV — cutting size by roughly **65%**.
+EDCB writes recordings as raw MPEG-2 TS (~6–8 GB/hour). With a GPU, finished recordings are
+auto-compressed to **HEVC** — **keeping ARIB captions and program metadata (SDT/EIT)** so they stay
+fully catalogued in KonomiTV — cutting size by roughly **50–65%**.
 
 How it works:
-- EDCB runs `edcb/postrec.sh` after every recording (its default preset's `BatFilePath` in
-  `EpgTimerSrv.ini`, passing `$FilePath`).
-- The script uses **[tsreplace](https://github.com/rigaya/tsreplace)** (rigaya) to re-encode *only*
-  the video PID to HEVC via NVENC, copying audio / captions / SDT-EIT through unchanged, then replaces
-  the raw `.ts` in place.
+- A dedicated **`postrec`** service (a watcher built from the `tv-edcb` image — `edcb/watch-recordings.sh`)
+  scans `/recordings` and compresses any recording whose size has been **stable for ~2 min** — i.e. any
+  *finished* recording, whether it ended naturally **or was stopped/cancelled early**. (A watcher is used
+  rather than EDCB's post-record bat because the bat only fires on natural completion.)
+- It uses **[tsreplace](https://github.com/rigaya/tsreplace)** (rigaya) to re-encode *only* the video PID
+  to HEVC via NVENC, copying audio / captions / SDT-EIT through unchanged, then replaces the raw `.ts`
+  in place. Already-HEVC files are skipped (idempotent).
 - The KonomiTV fork includes a small `MetadataAnalyzer` fix so re-encoded HEVC recordings catalog
   (upstream's sample-probe otherwise misses the re-muxed audio).
 
-Enabled by default via the `[REC_DEF] BatFilePath` line; the script is a **safe no-op** (keeps the raw
-`.ts`) on hosts without a GPU. Requires the GPU override (`edcb` also gets GPU access). To turn it off,
-remove that `BatFilePath` line. Captions are preserved (unlike a plain ffmpeg re-encode).
+Requires the GPU override (`postrec` gets GPU access via `docker-compose.nvidia.yaml`). The watcher is a
+**safe no-op** (recordings kept raw) on hosts without a GPU. To disable, just don't run the `postrec`
+service. Captions are preserved (unlike a plain ffmpeg re-encode).
 
 ## Adapting to your environment
 
