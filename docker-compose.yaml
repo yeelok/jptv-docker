@@ -1,6 +1,6 @@
 services:
   mirakc:
-    image: mirakc/mirakc:alpine
+    image: mirakc/mirakc:3.4.75-alpine
     container_name: mirakc
     init: true
     restart: unless-stopped

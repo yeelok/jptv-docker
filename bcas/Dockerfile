@@ -1,9 +1,10 @@
-FROM alpine AS ifd-build
+FROM alpine:3.24 AS ifd-build
 RUN apk add --no-cache build-base git pcsc-lite-dev
-RUN git clone --depth=1 https://github.com/yyya-nico/px4_drv /src
+RUN git clone --filter=blob:none https://github.com/yyya-nico/px4_drv /src && \
+    git -C /src checkout d295c0b0
 RUN make -C /src/userland/ifd-px4
 
-FROM alpine
+FROM alpine:3.24
 COPY ./main.sh /
 # px4_drv 用の PC/SC IFD ハンドラーを bundle として配置する
 # (標準の ccid ドライバでは /dev/pxmlt8card0 を扱えないため必須)

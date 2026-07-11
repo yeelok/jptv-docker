@@ -63,7 +63,7 @@ Two independent data paths:
 
 | Service | Role | Ports | Image / build | Upstream |
 |---|---|---|---|---|
-| **mirakc** | Tuner server + EPG (Mirakurun-compatible) | `40772` | `mirakc/mirakc:alpine` | [mirakc/mirakc](https://github.com/mirakc/mirakc) |
+| **mirakc** | Tuner server + EPG (Mirakurun-compatible) | `40772` | `mirakc/mirakc:3.4.75-alpine` | [mirakc/mirakc](https://github.com/mirakc/mirakc) |
 | **b25** | ARIB-B25 descrambler | `40773` | build `./b25` | [tsukumijima/libaribb25](https://github.com/tsukumijima/libaribb25) |
 | **bcas** | Card-reader server (`pcscd` + PX4 IFD handler) | `40774` | build `./bcas` | [yyya-nico/px4_drv](https://github.com/yyya-nico/px4_drv) (`userland/ifd-px4`) |
 | **edcb** | Recording backend (EpgTimerSrv) + Material WebUI | `4510`, `5510` | build `./edcb` | [xtne6f/EDCB](https://github.com/xtne6f/EDCB) · [matching/BonDriver_LinuxMirakc](https://github.com/matching/BonDriver_LinuxMirakc) · [EMWUI/EDCB_Material_WebUI](https://github.com/EMWUI/EDCB_Material_WebUI) |

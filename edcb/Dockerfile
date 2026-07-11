@@ -19,8 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # EDCB 本体のビルド
 WORKDIR /tmp
-RUN git clone -b work-plus-s-251101 --depth=1 \
-    https://github.com/xtne6f/EDCB.git
+RUN git clone --filter=blob:none -b work-plus-s-251101 \
+    https://github.com/xtne6f/EDCB.git && \
+    git -C EDCB checkout d21fa8a8
 WORKDIR /tmp/EDCB/Document/Unix
 RUN make -j "$(nproc)" && \
     make install && \
@@ -33,15 +34,18 @@ RUN make -j "$(nproc)" && \
 
 # EDCB Material WebUI のインストール
 WORKDIR /tmp
-RUN git clone --depth=1 https://github.com/EMWUI/EDCB_Material_WebUI.git
+RUN git clone --filter=blob:none https://github.com/EMWUI/EDCB_Material_WebUI.git && \
+    git -C EDCB_Material_WebUI checkout 68854a2a
 WORKDIR /tmp/EDCB_Material_WebUI
 RUN cp -r HttpPublic /var/local/edcb/ && \
     cp -r Setting /var/local/edcb/
 
 # BonDriver_LinuxMirakc のビルド (mirakc 専用 BonDriver)
 WORKDIR /tmp
-RUN git clone --depth=1 --recurse-submodules \
-    https://github.com/matching/BonDriver_LinuxMirakc.git
+RUN git clone --filter=blob:none --recurse-submodules \
+    https://github.com/matching/BonDriver_LinuxMirakc.git && \
+    git -C BonDriver_LinuxMirakc checkout cfbefc6d && \
+    git -C BonDriver_LinuxMirakc submodule update --init --recursive
 WORKDIR /tmp/BonDriver_LinuxMirakc
 RUN make -j "$(nproc)" && \
     cp BonDriver_LinuxMirakc.so /usr/local/lib/edcb/ && \

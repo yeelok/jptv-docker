@@ -13,7 +13,7 @@
 
 set -eu
 
-IMAGE='docker.io/mirakc/mirakc:latest'
+IMAGE='docker.io/mirakc/mirakc:3.4.75-alpine'
 CHANNEL="${1:-}"
 TUNER="${2:-/dev/pxmlt8video0}"
 DURATION="${3:-10}"
