@@ -268,6 +268,20 @@ the Material WebUI at `http://<host>:5510/`).
 
 ---
 
+## Keeping dependencies current
+
+All images and git refs are **pinned** (see the reproducibility note in the Dockerfiles). To check
+whether any upstream has a newer version:
+
+```bash
+python3 scripts/check-updates.py
+```
+
+It reads the current pins from the source files and compares them against upstream (Docker Hub tags,
+git `HEAD`s, EDCB `work-plus-s-*` tags, KonomiTV releases), printing a table and exiting non-zero if
+updates exist — so you can run it from cron or CI. To apply an update, edit the pin it points you to
+(e.g. bump `mirakc/mirakc:3.4.x-alpine` or the EDCB tag / a clone SHA), then rebuild that service.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
