@@ -10,6 +10,9 @@
 !/edcb/conf/Setting/*ChSet4.txt
 !/edcb/conf/Setting/ChSet5.txt
 
+# Local compose env (e.g. COMPOSE_FILE for the NVIDIA override); .env.example is tracked
+/.env
+
 # Claude Code local settings
 /.claude/
 

@@ -257,6 +257,32 @@ the Material WebUI at `http://<host>:5510/`).
 
 ---
 
+## Hardware transcoding (optional, NVIDIA GPU)
+
+By default KonomiTV transcodes live TV in **software** (FFmpeg / libx264). With an **NVIDIA GPU**
+you can offload decode + encode to the GPU via **NVEncC** (NVDEC + NVENC), freeing the CPU:
+
+1. On the host, install the **NVIDIA driver** and the **NVIDIA Container Toolkit**:
+   ```bash
+   sudo apt-get install -y nvidia-container-toolkit
+   sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+   docker run --rm --gpus all ubuntu nvidia-smi     # should list your GPU
+   ```
+2. Set `encoder: 'NVEncC'` in `KonomiTV/config.yaml`.
+3. Layer the GPU override (`docker-compose.nvidia.yaml`) onto the stack — either per command:
+   ```bash
+   docker compose -f docker-compose.yaml -f docker-compose.nvidia.yaml up -d
+   ```
+   or persistently: copy `.env.example` → `.env` and uncomment the `COMPOSE_FILE` line, after which
+   plain `docker compose …` includes the override automatically.
+
+KonomiTV validates the encoder against the GPU **at startup**, so do steps 1–2 before enabling the
+override (otherwise it won't start). Verify with `nvidia-smi` while watching a channel — you'll see
+an `NVEncC.elf` process and non-zero encoder/decoder utilization.
+
+> The base `docker-compose.yaml` has **no** GPU requirement, so it runs anywhere. AMD (`VCEEncC` +
+> `/dev/dri`) and Intel (`QSVEncC`) follow the same override pattern with the appropriate encoder.
+
 ## Adapting to your environment
 
 - **Different tuner model** — update the `devices:` and the card device in `docker-compose.yaml`, the

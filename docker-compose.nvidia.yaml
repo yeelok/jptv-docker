@@ -1,0 +1,22 @@
+# NVIDIA GPU hardware transcoding override for KonomiTV (NVEncC).
+#
+# Requires on the host:
+#   - NVIDIA driver
+#   - NVIDIA Container Toolkit  (sudo nvidia-ctk runtime configure --runtime=docker)
+# and in KonomiTV/config.yaml:
+#   - encoder: 'NVEncC'
+#
+# Enable by including this file in your compose invocation, either via COMPOSE_FILE
+# in a local .env (see .env.example), or explicitly:
+#   docker compose -f docker-compose.yaml -f docker-compose.nvidia.yaml up -d
+#
+# 'video' in capabilities is required for NVENC/NVDEC access.
+services:
+  konomitv:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility, video]
