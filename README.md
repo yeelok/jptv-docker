@@ -113,7 +113,8 @@ lsusb | grep 0511                          # tuner enumerated (VID 0x0511)
 KonomiTV's internal HTTP server binds to a fixed loopback address in source, with no config option.
 This stack changes it to `0.0.0.0` (one line in `server/KonomiTV.py`) so you can front KonomiTV with
 **your own reverse proxy** on port `7010`. That change lives in a **fork** of KonomiTV, pinned as the
-submodule.
+submodule. The fork carries a second small patch too — a `MetadataAnalyzer` fix so GPU-compressed HEVC
+recordings catalog correctly (see [Post-record compression](#post-record-compression-optional-nvidia-gpu)).
 
 > If you only use KonomiTV's built-in HTTPS (Akebi) on port `7000`, you don't need the change — point
 > the submodule at upstream `tsukumijima/KonomiTV` instead.
@@ -282,6 +283,25 @@ an `NVEncC.elf` process and non-zero encoder/decoder utilization.
 
 > The base `docker-compose.yaml` has **no** GPU requirement, so it runs anywhere. AMD (`VCEEncC` +
 > `/dev/dri`) and Intel (`QSVEncC`) follow the same override pattern with the appropriate encoder.
+
+## Post-record compression (optional, NVIDIA GPU)
+
+EDCB writes recordings as raw MPEG-2 TS (~6–8 GB/hour). With a GPU, each finished recording can be
+auto-compressed to **HEVC** — **keeping ARIB captions and program metadata (SDT/EIT)** so it stays
+fully catalogued in KonomiTV — cutting size by roughly **65%**.
+
+How it works:
+- EDCB runs `edcb/postrec.sh` after every recording (its default preset's `BatFilePath` in
+  `EpgTimerSrv.ini`, passing `$FilePath`).
+- The script uses **[tsreplace](https://github.com/rigaya/tsreplace)** (rigaya) to re-encode *only*
+  the video PID to HEVC via NVENC, copying audio / captions / SDT-EIT through unchanged, then replaces
+  the raw `.ts` in place.
+- The KonomiTV fork includes a small `MetadataAnalyzer` fix so re-encoded HEVC recordings catalog
+  (upstream's sample-probe otherwise misses the re-muxed audio).
+
+Enabled by default via the `[REC_DEF] BatFilePath` line; the script is a **safe no-op** (keeps the raw
+`.ts`) on hosts without a GPU. Requires the GPU override (`edcb` also gets GPU access). To turn it off,
+remove that `BatFilePath` line. Captions are preserved (unlike a plain ffmpeg re-encode).
 
 ## Adapting to your environment
 

@@ -61,6 +61,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# tsreplace (rigaya): re-encodes only the video PID of a TS, copying audio / ARIB captions /
+# SDT/EIT unchanged. Used by the post-record compression hook (edcb/postrec.sh) so compressed
+# recordings keep their program metadata + captions and stay fully catalogued by KonomiTV.
+# Prebuilt .deb depends only on libc6/libgcc-s1 (both present in bookworm).
+ADD https://github.com/rigaya/tsreplace/releases/download/0.19/tsreplace_0.19_amd64.deb /tmp/tsreplace.deb
+RUN dpkg -i /tmp/tsreplace.deb && rm -f /tmp/tsreplace.deb
+
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 COPY --from=builder /usr/local/lib/edcb/ /usr/local/lib/edcb/
 RUN mkdir -p /var/local/edcb && chmod 777 /var/local/edcb

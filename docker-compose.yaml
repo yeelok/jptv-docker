@@ -99,6 +99,9 @@ services:
       - ./edcb/conf/EpgTimerSrv.ini:/var/local/edcb/EpgTimerSrv.ini
       - ./edcb/conf/Setting:/var/local/edcb/Setting
       - /recordings:/recordings
+      # 録画後実行スクリプト (EpgTimerSrv.ini の BatFilePath から呼ばれる)。
+      # GPU がある環境では録画完了後に HEVC へ圧縮し raw ts を置き換える (無ければ raw のまま)。
+      - ./edcb/postrec.sh:/var/local/edcb/postrec.sh:ro
 
   konomitv:
     extends:
