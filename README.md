@@ -119,7 +119,11 @@ lsusb | grep 0511                          # tuner enumerated (VID 0x0511)
 KonomiTV's internal HTTP server binds to a fixed loopback address in source, with no config option.
 This stack changes it to `0.0.0.0` (one line in `server/KonomiTV.py`) so you can front KonomiTV with
 **your own reverse proxy** on port `7010`. That change lives in a **fork** of KonomiTV, pinned as the
-submodule. That one-line change is the fork's **only** divergence from upstream.
+submodule. The fork carries two additions over upstream:
+
+- **`bind-0.0.0.0`** — the one-line listen-address change above.
+- **Live HLS endpoint** — an API-only addition that serves the live stream as HLS (see
+  [Live HLS streaming](#live-hls-streaming-api-only)); upstream only offers live TV as MPEG-TS.
 
 > If you only use KonomiTV's built-in HTTPS (Akebi) on port `7000`, you don't need the change — point
 > the submodule at upstream `tsukumijima/KonomiTV` instead.
@@ -246,12 +250,28 @@ the Material WebUI at `http://<host>:5510/`).
   - OpenAPI spec (import into Postman/Insomnia): `http://<host>:7010/api/openapi.json`
 
   Handy endpoints: `GET /api/channels`, `GET /api/streams/live/{display_channel_id}/{quality}/mpegts`
-  (H.264, play with `mpegts.js`; e.g. `gr011`/`1080p`), `GET /api/programs/timetable`,
+  (H.264, play with `mpegts.js`; e.g. `gr011`/`1080p`), `GET /api/streams/live/{…}/{…}/hls`
+  ([live HLS](#live-hls-streaming-api-only), this fork), `GET /api/programs/timetable`,
   `POST /api/programs/search`, `GET/POST /api/recording/reservations`, `GET /api/recording/presets`,
   `GET /api/videos`. Some write/account endpoints need a Bearer token from `POST /api/users/token`.
 
 > Note: mirakc's raw streams are broadcast **MPEG-2** and won't play in a bare browser `<video>`. Use a native
 > player (mpv/VLC) for mirakc URLs, or KonomiTV (which transcodes to H.264) for browser playback.
+
+### Live HLS streaming (API only)
+
+Upstream KonomiTV serves live TV only as a continuous MPEG-TS (`…/mpegts`, for `mpegts.js`). This fork
+adds a **live HLS** endpoint (API only — not wired into the KonomiTV UI):
+
+- Playlist: `GET /api/streams/live/{display_channel_id}/{quality}/hls` → sliding-window `.m3u8`
+- Segments: `GET /api/streams/live/{display_channel_id}/{quality}/hls/{segment}` → MPEG-TS segment
+
+Example: `http://<host>:7010/api/streams/live/gr011/1080p/hls` plays in any HLS player (Safari, hls.js,
+VLC, ffmpeg). How it works: it taps the **same shared encoder** as `…/mpegts` via an internal client and
+runs `ffmpeg -c copy -f hls` (no second transcode), so live-HLS and `mpegts.js` viewers share one tuner.
+The segmenter starts on first playlist request and **auto-stops ~30 s after the last request**, freeing
+the tuner. First request blocks briefly (a few seconds) while the tuner spins up and the first segments
+are written.
 
 ---
 
