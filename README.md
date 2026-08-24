@@ -264,11 +264,66 @@ git submodule update --init --recursive
 
 ### 4. Prepare the recordings directory
 
-`edcb` runs as UID `1000` so recordings are owned by your host user. Create the output dir owned by that UID:
+`edcb` and `postrec` run as UID `1000` so recordings are owned by your host user. For a **local**
+directory, create it owned by that UID:
 
 ```bash
 sudo mkdir -p /recordings && sudo chown 1000:1000 /recordings
 ```
+
+#### If `/recordings` is a network share (NFS/SMB)
+
+Ownership is then the *server's* to decide and `chown` on the client is meaningless — you have to make
+the export writable by UID `1000` on the server side. Watch out for one trap: **the mode bits you see on
+the client can be misleading.** A share can show `drwxrwxrwx` yet still refuse writes, because the real
+grant lives in the server's ACL / share permissions and is keyed to a specific uid or gid.
+
+The failure is asymmetric and easy to misdiagnose — the host writes fine while the containers don't:
+
+```bash
+touch /recordings/probe                                                   # works as your user
+docker run --rm -u 1000:1000 -v /recordings:/t busybox touch /t/probe     # Permission denied
+```
+
+That gap is supplementary groups. Your login shell carries a dozen of them; a container started with
+`user: "1000:1000"` carries **none**, so any grant that depends on a group is silently lost. AUTH_SYS
+sends bare numeric ids, so a *local* group of yours can also collide with an unrelated group on the
+server and make host writes succeed for the wrong reason.
+
+Find the gid the server actually honours by bisecting your own groups:
+
+```bash
+for g in $(id -G); do
+  printf 'gid %-5s ' "$g"
+  docker run --rm -u 1000:1000 --group-add "$g" -v /recordings:/t busybox \
+    sh -c 'touch /t/.probe && rm -f /t/.probe && echo OK || echo FAIL'
+done
+```
+
+then add the winner to the services that write recordings — `edcb` and `postrec` (not `edcb_chscan`,
+which has no `/recordings` mount):
+
+```yaml
+  edcb:
+    user: "1000:1000"
+    group_add:
+      - "101"      # gid the share grants write to
+```
+
+> The reference `docker-compose.yaml` ships `group_add: ["101"]` because this setup stores recordings on
+> a Synology NAS over NFS, where that share is writable by gid `101` (`administrators`). **Change or drop
+> it to match your storage** — it is environment-specific, not a general requirement.
+
+Verify the whole recording lifecycle before starting the stack, since a mid-recording `mv` failure in
+`postrec` is a much worse way to find out:
+
+```bash
+docker run --rm -u 1000:1000 --group-add 101 -v /recordings:/t busybox sh -c '
+  echo x > /t/rec.ts && mv /t/rec.ts /t/rec.part.ts && rm -f /t/rec.part.ts && echo LIFECYCLE_OK'
+```
+
+KonomiTV needs no such treatment: it runs as root and reaches recordings through its `/` → `/host-rootfs`
+bind mount, which carries the network submount along with it.
 
 ### 5. Build and start
 
@@ -482,6 +537,7 @@ updates exist — so you can run it from cron or CI. To apply an update, edit th
 | Recording preset fetch fails: `EpgTimerSrv.ini is empty` (HTTP 500) | Set `CompatFlags=128` in `edcb/conf/EpgTimerSrv.ini` and restart `edcb`. |
 | Guide is empty on the EDCB backend | EDCB gathers EPG on the `[EPG_CAP]` schedule; trigger one now from the Material WebUI (`:5510`) or wait for the next slot. |
 | Recordings owned by `root` | `edcb` must run as your UID (`user: "1000:1000"`), and `/recordings` + `edcb/conf/Setting` must be writable by it. |
+| `edcb`/`postrec`: `Permission denied` writing to `/recordings`, but your shell writes there fine | `/recordings` is a network share whose grant is keyed to a **group**. A `user: "1000:1000"` container carries no supplementary groups, so it loses that grant while your login shell keeps it. Find the gid and add it via `group_add` — see [If `/recordings` is a network share](#if-recordings-is-a-network-share-nfssmb). Note the mode can read `drwxrwxrwx` and still deny writes. |
 | `File is not recording. ignored.` spam | Harmless (see [Recording notes](#recording-notes)). |
 
 ---

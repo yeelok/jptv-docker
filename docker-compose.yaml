@@ -87,6 +87,12 @@ services:
     container_name: edcb
     # 録画ファイルをホストユーザー (uid 1000) 所有で書き出すため非 root で実行する。
     user: "1000:1000"
+    # /recordings は NAS の NFS export (mode 777 だが実際の書き込み権限は gid 101 =
+    # Synology の administrators に付与されている)。非 root 実行のコンテナは補助グループを
+    # 一切持たないため、これを足さないと録画ファイルを作成できず Permission denied になる。
+    # (ホストの ubuntu ユーザーがローカルの gid 101 に属しているため、ホストからは偶然書けている)
+    group_add:
+      - "101"
     depends_on:
       mirakc:
         condition: service_healthy
@@ -109,6 +115,9 @@ services:
     image: tv-edcb
     container_name: postrec
     user: "1000:1000"
+    # /recordings (NFS) への書き込みには gid 101 が必要 (詳細は edcb サービスのコメント参照)。
+    group_add:
+      - "101"
     restart: unless-stopped
     command: ["/bin/sh", "/opt/watch-recordings.sh"]
     volumes:
