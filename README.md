@@ -82,18 +82,26 @@ Two independent data paths:
 - A **PLEX PX-MLT / PX4 / PX5-series tuner** (this reference uses PX-MLT8PE) with a **B-CAS or ACAS card**
   seated in the tuner's internal card slot.
 - A **Linux host** with **Docker** and the **Docker Compose v2** plugin.
-- The **px4_drv kernel driver** built and loaded on the host, exposing the device nodes:
+- The **px4_drv kernel driver — specifically the [`yyya-nico/px4_drv`](https://github.com/yyya-nico/px4_drv)
+  fork** — built and loaded on the host, exposing the device nodes:
   - `/dev/pxmlt8video0` … `pxmlt8video7` (tuners)
   - `/dev/pxmlt8card0` (card reader)
 
-  Build it from the [`yyya-nico/px4_drv`](https://github.com/yyya-nico/px4_drv) fork (DKMS supported).
-  > You only need the **kernel module** on the host. The PC/SC **IFD handler (`ifd-px4`)** is compiled
-  > *inside the `bcas` image* — no host-side `pcscd`/handler install required.
+  > **The fork is not optional.** Upstream px4_drv (nns779 / tsukumijima, and any distro package built
+  > from it) creates only the `*video*` nodes — it has no card-reader code at all. Only the fork ships
+  > `driver/px4_card.c` and registers `/dev/pxmlt8card0`. Without that node there is nothing to
+  > descramble with, and the whole b25/bcas chain is dead. See
+  > [1. Install the host driver](#1-install-the-host-driver).
+
+  > You only need the **kernel module** on the host — the PC/SC **IFD handler (`ifd-px4`)** is compiled
+  > *inside the `bcas` image*. The host must **not** run its own `pcscd`; see
+  > [Disable the host-side PC/SC daemon](#disable-the-host-side-pcsc-daemon).
 
 Verify before starting:
 
 ```bash
-ls /dev/pxmlt8video* /dev/pxmlt8card0     # devices exist
+ls /dev/pxmlt8video* /dev/pxmlt8card0     # all nine nodes exist (pxmlt8card0 ⇒ the fork is loaded)
+grep pxmlt8card /proc/devices              # char major registered by the fork's card driver
 lsusb | grep 0511                          # tuner enumerated (VID 0x0511)
 ```
 
@@ -134,8 +142,99 @@ submodule. The fork carries two additions over upstream:
 
 ### 1. Install the host driver
 
-Build and load `px4_drv` from the fork, insert your B-CAS/ACAS card, and confirm the device nodes exist
-(see [Prerequisites](#prerequisites)).
+The card-reader node `/dev/pxmlt8card0` is created by the **kernel module**, and only the
+[`yyya-nico/px4_drv`](https://github.com/yyya-nico/px4_drv) fork has that code. Install upstream px4_drv
+(or a distro package) and you get the eight tuner nodes and no card node — live TV tunes, but nothing
+can ever be descrambled.
+
+This failure is easy to misread, because building the fork's `userland/ifd-px4` on the host **is not
+enough on its own**: the handler installs and loads fine, then correctly reports that the device it
+needs does not exist —
+
+```
+ifdhandler.c:801:px4_ifd_open_by_usb_path() No available device for VID=0511 PID=0253 (prefix=pxmlt8card)
+readerfactory.c:371:RFAddReader() PLEX PX-MLT8PE Smart Card Reader (…) init failed.
+```
+
+That message means **the wrong kernel driver is installed**, not that the handler or the card is broken.
+
+Install the fork via DKMS (the `px4_drv/` submodule in this repo *is* that fork, pinned):
+
+> These commands run from a clone of this repo, so do [2. Clone with submodules](#2-clone-with-submodules)
+> first if you haven't — or clone [`yyya-nico/px4_drv`](https://github.com/yyya-nico/px4_drv) on its own
+> and use that path instead.
+
+```bash
+git submodule update --init px4_drv          # if you didn't clone with --recursive
+
+# 1. remove any px4_drv already installed, so only one module is ever in play
+dkms status | grep px4_drv                   # e.g. "px4_drv/0.5.6, 7.0.0-30-generic, x86_64: installed"
+sudo dkms remove px4_drv/<installed-version> --all
+sudo rm -rf /usr/src/px4_drv-<installed-version>
+
+# 2. install the fork — its dkms.conf declares 0.5.5, and the directory name must match
+sudo rsync -a --exclude .git px4_drv/ /usr/src/px4_drv-0.5.5/
+sudo dkms add     -m px4_drv -v 0.5.5
+sudo dkms install -m px4_drv -v 0.5.5        # post_install also installs the udev rules + firmware
+
+# 3. reload
+sudo modprobe -r px4_drv && sudo modprobe px4_drv
+```
+
+Insert your B-CAS/ACAS card, then confirm **all nine** nodes exist — `pxmlt8card0` is the one that
+proves the fork is loaded:
+
+```bash
+ls -l /dev/pxmlt8video* /dev/pxmlt8card0
+```
+
+The kernel log should show the card node being created alongside the tuners:
+
+```
+px4_drv: px4_card: device context group (pxmlt8card) created
+px4_usb 2-1:1.0: /dev/pxmlt8card0
+```
+
+If `/dev/pxmlt8card0` is missing, the wrong driver is still installed — re-check `dkms status`,
+`grep pxmlt8card /proc/devices`, and that `/usr/src/px4_drv-*/driver/px4_card.c` exists.
+
+> The fork tracks an older upstream release (0.5.5 vs 0.5.6), so this is a slight downgrade of the
+> tuner driver itself. That is inherent to using it.
+
+#### Disable the host-side PC/SC daemon
+
+This stack runs **`pcscd` + `ifd-px4` inside the `bcas` container**, so the host must not run its own.
+`/dev/pxmlt8card0` is opened **exclusively** — whichever `pcscd` claims it first wins and the other gets
+nothing. A host `pcscd` is easy to start by accident: it is socket-activated, so *any* local PC/SC client
+(`pcsc_scan`, GnuPG, a browser smart-card module) spawns it on demand, and it then takes the reader away
+from `bcas`, which fails with `B_CAS_CARD::init() : code=-3`.
+
+Disable **and mask** both units — masking is what actually stops socket activation from bringing it back:
+
+```bash
+sudo systemctl disable --now pcscd.socket pcscd.service
+sudo systemctl mask pcscd.socket pcscd.service
+```
+
+Verify nothing holds the device:
+
+```bash
+systemctl is-active pcscd.socket pcscd.service   # inactive  inactive
+pgrep -a pcscd                                    # no output
+```
+
+If you want to test the card on the host first, do it **before** masking — and know that two unrelated
+quirks make a perfectly good reader look broken:
+
+- `pcsc_scan` as a normal user over SSH fails with `SCardEstablishContext: Access denied.` The
+  `org.debian.pcsc-lite.access_pcsc` polkit action grants only `allow_active`, and an SSH session is
+  seatless, so it does not qualify. Use `sudo pcsc_scan`.
+- Starting `pcscd.service` directly wipes `/run/pcscd` (`RuntimeDirectory=pcscd`), deleting the
+  `pcscd.comm` socket that `pcscd.socket` is listening on; clients then get
+  `SCardEstablishContext: Service not available.` Recreate it with `sudo systemctl restart pcscd.socket`.
+
+A healthy reader prints the B-CAS ATR, e.g. `ATR: 3B F0 12 00 FF 91 81 B1 7C 45 1F 03 99` →
+*Japanese Chijou Digital B-CAS Card (pay TV)*. Re-mask `pcscd` when you are done.
 
 ### 2. Clone with submodules
 
@@ -375,7 +474,11 @@ updates exist — so you can run it from cron or CI. To apply an update, edit th
 
 | Symptom | Cause / fix |
 |---|---|
-| `b25 \| B_CAS_CARD::init() : code=-3` | `pcscd` in `bcas` can't see the reader — the `ifd-px4` handler must be in the image (it is, via the build). Ensure `/dev/pxmlt8card0` is passed and the tuner shows up as USB `0511:*`. |
+| `/dev/pxmlt8card0` missing (tuner nodes fine) | The **wrong px4_drv** is installed — upstream has no card-reader code. Install the fork, see [1. Install the host driver](#1-install-the-host-driver). Confirm with `grep pxmlt8card /proc/devices`. |
+| pcscd: `No available device for VID=0511 … (prefix=pxmlt8card)` | Same cause. The `ifd-px4` handler is working and telling you `/dev/pxmlt8card0` doesn't exist — it's the kernel module that's wrong, not the handler. |
+| `b25 \| B_CAS_CARD::init() : code=-3` | `pcscd` in `bcas` can't get the reader. Either a **host `pcscd` has the device open exclusively** (mask it — see [Disable the host-side PC/SC daemon](#disable-the-host-side-pcsc-daemon)), or `/dev/pxmlt8card0` isn't passed / doesn't exist. The `ifd-px4` handler itself is already in the image via the build. |
+| `pcsc_scan`: `SCardEstablishContext: Access denied.` | polkit, not the driver — `access_pcsc` allows only `allow_active` and an SSH session is seatless. Use `sudo pcsc_scan`. Irrelevant once the host `pcscd` is masked. |
+| `pcsc_scan`: `SCardEstablishContext: Service not available.` | `pcscd.service` started directly wiped `/run/pcscd` and with it the `pcscd.comm` socket. `sudo systemctl restart pcscd.socket`. |
 | Recording preset fetch fails: `EpgTimerSrv.ini is empty` (HTTP 500) | Set `CompatFlags=128` in `edcb/conf/EpgTimerSrv.ini` and restart `edcb`. |
 | Guide is empty on the EDCB backend | EDCB gathers EPG on the `[EPG_CAP]` schedule; trigger one now from the Material WebUI (`:5510`) or wait for the next slot. |
 | Recordings owned by `root` | `edcb` must run as your UID (`user: "1000:1000"`), and `/recordings` + `edcb/conf/Setting` must be writable by it. |
