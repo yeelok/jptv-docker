@@ -1,0 +1,13 @@
+[Unit]
+Description=jptv-docker tuner watchdog (recover stack when tuner devices are late/missing)
+Documentation=file:/home/ubuntu/tv/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/tv/scripts/tuner-watchdog.sh
+# Re-enumerating USB devices and driving docker compose both need root.
+User=root
+# `docker compose up -d` waits on mirakc's healthcheck, which can take a while.
+TimeoutStartSec=600

@@ -442,6 +442,63 @@ are written.
 
 ---
 
+## Surviving a host reboot
+
+`mirakc`'s compose entry lists all eight tuner device nodes, and Docker fails at **container
+creation** when even one is absent:
+
+```
+Error response from daemon: error gathering device information while adding
+custom device "/dev/pxmlt8video5": no such file or directory
+```
+
+A creation failure never reaches the restart policy, so `mirakc` stays `Exited (255)` indefinitely
+and **KonomiTV crash-loops behind it** (it validates `mirakurun_url` at startup and refuses to run
+without a reachable tuner server). The result is a total, silent outage — no alert anywhere, missed
+recordings, and nothing recovers on its own.
+
+This is not hypothetical: on a virtualised host the hypervisor presented only one of the card's two
+USB devices at VM boot, `video5-7` never appeared, and the stack sat down for three days.
+
+**The real fix is host-side.** If the tuner is a PCIe card in a VM, pass the *card* through with
+VFIO instead of forwarding its individual USB devices — the guest then owns the real controller and
+does not depend on the hypervisor re-presenting two USB devices correctly at every boot.
+
+### The watchdog (guest-side safety net)
+
+`scripts/tuner-watchdog.sh` + a systemd timer make the guest recover by itself. Every 5 minutes
+(and 90 s after boot) it:
+
+1. checks all nine device nodes (`pxmlt8video0-7` + `pxmlt8card0`);
+2. if any are missing, re-enumerates the card's USB devices via `/sys/.../authorized` — which
+   recovers a device the kernel bound but left in a no-data state, though it cannot conjure one the
+   hypervisor never presented — and logs a loud `ERROR` if they are still absent;
+3. once all devices are present, runs `docker compose up -d` to start whatever is down.
+
+On a healthy system it is a silent no-op. Install it with:
+
+```bash
+sudo cp scripts/jptv-watchdog.service scripts/jptv-watchdog.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now jptv-watchdog.timer
+```
+
+Check on it with:
+
+```bash
+systemctl list-timers jptv-watchdog.timer      # next/last run
+journalctl -u jptv-watchdog.service -n 50      # what it did, and why
+```
+
+> **Debugging?** `touch .watchdog-disabled` in the project root and the watchdog does nothing, so a
+> deliberate `docker stop` isn't undone 5 minutes later. Remove the file to re-arm it.
+
+> The timer uses `OnUnitInactiveSec`, not `OnUnitActiveSec`: the service is `Type=oneshot`, so it
+> goes inactive as soon as it finishes and `OnUnitActiveSec` would leave the timer with no anchor
+> (`systemctl list-timers` shows an empty `NEXT`).
+
+---
+
 ## Hardware transcoding (optional, NVIDIA GPU)
 
 By default KonomiTV transcodes live TV in **software** (FFmpeg / libx264). With an **NVIDIA GPU**
@@ -536,6 +593,7 @@ updates exist — so you can run it from cron or CI. To apply an update, edit th
 | `pcsc_scan`: `SCardEstablishContext: Service not available.` | `pcscd.service` started directly wiped `/run/pcscd` and with it the `pcscd.comm` socket. `sudo systemctl restart pcscd.socket`. |
 | Recording preset fetch fails: `EpgTimerSrv.ini is empty` (HTTP 500) | Set `CompatFlags=128` in `edcb/conf/EpgTimerSrv.ini` and restart `edcb`. |
 | Guide is empty on the EDCB backend | EDCB gathers EPG on the `[EPG_CAP]` schedule; trigger one now from the Material WebUI (`:5510`) or wait for the next slot. |
+| `mirakc` `Exited (255)`, KonomiTV restart-looping | A tuner device node is missing, so Docker can't create the mirakc container (`error gathering device information ... no such file or directory`), and a create-time failure bypasses the restart policy. Check `ls /dev/pxmlt8video*` and `lsusb \| grep 0511` — if a USB device is absent the hypervisor must re-present it. See [Surviving a host reboot](#surviving-a-host-reboot). |
 | Recordings owned by `root` | `edcb` must run as your UID (`user: "1000:1000"`), and `/recordings` + `edcb/conf/Setting` must be writable by it. |
 | `edcb`/`postrec`: `Permission denied` writing to `/recordings`, but your shell writes there fine | `/recordings` is a network share whose grant is keyed to a **group**. A `user: "1000:1000"` container carries no supplementary groups, so it loses that grant while your login shell keeps it. Find the gid and add it via `group_add` — see [If `/recordings` is a network share](#if-recordings-is-a-network-share-nfssmb). Note the mode can read `drwxrwxrwx` and still deny writes. |
 | `File is not recording. ignored.` spam | Harmless (see [Recording notes](#recording-notes)). |

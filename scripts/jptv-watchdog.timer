@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the jptv-docker tuner watchdog periodically
+
+[Timer]
+# At boot, give the hypervisor and udev time to present the tuner's USB devices.
+OnBootSec=90s
+OnUnitInactiveSec=5min
+AccuracySec=15s
+Unit=jptv-watchdog.service
+
+[Install]
+WantedBy=timers.target
